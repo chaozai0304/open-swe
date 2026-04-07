@@ -72,7 +72,9 @@ from .utils.agents_md import read_agents_md_in_sandbox
 from .utils.github import (
     _CRED_FILE_PATH,
     cleanup_git_credentials,
+    git_current_branch,
     git_has_uncommitted_changes,
+    git_pull_branch,
     is_valid_git_repo,
     remove_directory,
     setup_git_credentials,
@@ -173,10 +175,21 @@ async def _clone_or_pull_repo_in_sandbox(  # noqa: PLR0915
             credential_username,
         )
         try:
+            current_branch = await loop.run_in_executor(
+                None, git_current_branch, sandbox_backend, repo_dir
+            )
+            if not current_branch:
+                msg = f"Failed to determine current branch for repo at {repo_dir}"
+                logger.error(msg)
+                raise RuntimeError(msg)
+
             pull_result = await loop.run_in_executor(
                 None,
-                sandbox_backend.execute,
-                f"cd {repo_dir} && git {cred_helper_arg} pull origin $(git rev-parse --abbrev-ref HEAD)",
+                git_pull_branch,
+                sandbox_backend,
+                repo_dir,
+                current_branch,
+                token,
             )
             logger.debug("Git pull result: exit_code=%s", pull_result.exit_code)
             if pull_result.exit_code != 0:
@@ -188,8 +201,6 @@ async def _clone_or_pull_repo_in_sandbox(  # noqa: PLR0915
         except Exception:
             logger.exception("Failed to execute git pull")
             raise
-        finally:
-            await loop.run_in_executor(None, cleanup_git_credentials, sandbox_backend)
 
         logger.info("Repo updated at %s", repo_dir)
         return repo_dir
@@ -207,7 +218,7 @@ async def _clone_or_pull_repo_in_sandbox(  # noqa: PLR0915
         result = await loop.run_in_executor(
             None,
             sandbox_backend.execute,
-            f"git {cred_helper_arg} clone {safe_clean_url} {safe_repo_dir}",
+            f"git -c credential.helper={cred_helper_arg} clone {safe_clean_url} {safe_repo_dir}",
         )
         logger.debug("Git clone result: exit_code=%s", result.exit_code)
     except Exception:
